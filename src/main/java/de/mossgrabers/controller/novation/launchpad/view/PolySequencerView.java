@@ -110,6 +110,8 @@ public class PolySequencerView extends AbstractPolySequencerView<LaunchpadContro
             return;
 
         final int step = this.numColumns * (this.numRows - 1 - y) + x;
+        LaunchpadNoteLongPressHandler.selectStepNotes (this.getClip (), this.configuration.getMidiEditChannel (), step);
+        LaunchpadNoteLongPressHandler.showStepNotesNotification (this.surface, this.getClip (), this.configuration.getMidiEditChannel (), step);
         this.noteEditPosition = new NotePosition (this.configuration.getMidiEditChannel (), step, 0);
     }
 

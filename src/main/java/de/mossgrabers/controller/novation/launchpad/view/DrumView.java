@@ -134,9 +134,14 @@ public class DrumView extends AbstractDrumExView<LaunchpadControlSurface, Launch
         if (y < this.playRows)
             return;
 
+        final int step = this.numColumns * (this.allRows - 1 - y) + x;
+        final int noteRow = offsetY + this.selectedPad;
+        LaunchpadNoteLongPressHandler.selectNote (this.getClip (), this.configuration.getMidiEditChannel (), step, noteRow);
+        LaunchpadNoteLongPressHandler.showNoteNotification (this.surface, noteRow);
+
         // Remember the long pressed note to use it either for editing or for changing the length of
         // the note on pad release
-        this.noteEditPosition = new NotePosition (this.configuration.getMidiEditChannel (), this.numColumns * (this.allRows - 1 - y) + x, offsetY + this.selectedPad);
+        this.noteEditPosition = new NotePosition (this.configuration.getMidiEditChannel (), step, noteRow);
     }
 
 

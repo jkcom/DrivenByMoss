@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import com.bitwig.extension.controller.api.Clip;
+import com.bitwig.extension.controller.api.ControllerHost;
 import com.bitwig.extension.controller.api.CursorTrack;
 import com.bitwig.extension.controller.api.NoteOccurrence;
 import com.bitwig.extension.controller.api.NoteStep;
@@ -46,6 +47,10 @@ public class CursorClipImpl implements INoteClip
 
     private final IStepInfo [] [] [] launcherData;
     private final PinnableCursorClip launcherClip;
+    private final Clip               selectedLauncherClip;
+    private final Clip               selectedArrangerClip;
+    @SuppressWarnings ("deprecation")
+    private final Clip               selectedCursorClip;
     private int                      editPage        = 0;
     private double                   stepLength;
     private final List<NotePosition> editSteps       = new ArrayList<> ();
@@ -55,12 +60,13 @@ public class CursorClipImpl implements INoteClip
      * Constructor.
      *
      * @param host The host
+     * @param controllerHost The Bitwig controller host
      * @param cursorTrack The cursor track
      * @param valueChanger The value changer
      * @param numSteps The number of steps of the clip to monitor
      * @param numRows The number of note rows of the clip to monitor
      */
-    public CursorClipImpl (final IHost host, final CursorTrack cursorTrack, final IValueChanger valueChanger, final int numSteps, final int numRows)
+    public CursorClipImpl (final IHost host, final ControllerHost controllerHost, final CursorTrack cursorTrack, final IValueChanger valueChanger, final int numSteps, final int numRows)
     {
         this.host = host;
         this.valueChanger = valueChanger;
@@ -73,6 +79,9 @@ public class CursorClipImpl implements INoteClip
 
         // TODO Bugfix required: https://github.com/teotigraphix/Framework4Bitwig/issues/140
         this.launcherClip = cursorTrack.createLauncherCursorClip (this.numSteps, this.numRows);
+        this.selectedLauncherClip = controllerHost.createLauncherCursorClip (this.numSteps, this.numRows);
+        this.selectedArrangerClip = controllerHost.createArrangerCursorClip (this.numSteps, this.numRows);
+        this.selectedCursorClip = controllerHost.createCursorClip (this.numSteps, this.numRows);
 
         this.launcherClip.addNoteStepObserver (this::handleStepData);
 
@@ -421,6 +430,22 @@ public class CursorClipImpl implements INoteClip
             this.host.error ("Illegal index accessing step info array.", ex);
             return EmptyStepInfo.INSTANCE;
         }
+    }
+
+
+    /** {@inheritDoc} */
+    @Override
+    public void selectStepContents (final NotePosition notePosition, final boolean clearCurrentSelection)
+    {
+        this.selectStepContents (this.selectedCursorClip, notePosition, clearCurrentSelection);
+        this.selectStepContents (this.selectedLauncherClip, notePosition, clearCurrentSelection);
+        this.selectStepContents (this.selectedArrangerClip, notePosition, clearCurrentSelection);
+
+        this.host.scheduleTask (() -> {
+            this.selectStepContents (this.selectedCursorClip, notePosition, clearCurrentSelection);
+            this.selectStepContents (this.selectedLauncherClip, notePosition, clearCurrentSelection);
+            this.selectStepContents (this.selectedArrangerClip, notePosition, clearCurrentSelection);
+        }, 50);
     }
 
 
@@ -1334,6 +1359,14 @@ public class CursorClipImpl implements INoteClip
     private NoteStep getNoteStep (final NotePosition notePosition)
     {
         return this.getClip ().getStep (notePosition.getChannel (), notePosition.getStep (), notePosition.getNote ());
+    }
+
+
+    private void selectStepContents (final Clip clip, final NotePosition notePosition, final boolean clearCurrentSelection)
+    {
+        clip.showInEditor ();
+        clip.scrollToStep (this.editPage * this.numSteps);
+        clip.selectStepContents (notePosition.getChannel (), notePosition.getStep (), notePosition.getNote (), clearCurrentSelection);
     }
 
 

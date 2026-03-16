@@ -106,9 +106,14 @@ public class SequencerView extends AbstractNoteSequencerView<LaunchpadControlSur
         if (y >= this.numSequencerRows)
             return;
 
+        final int step = index % 8;
+        final int mappedNote = this.keyManager.map (y);
+        LaunchpadNoteLongPressHandler.selectNote (this.getClip (), this.configuration.getMidiEditChannel (), step, mappedNote);
+        LaunchpadNoteLongPressHandler.showNoteNotification (this.surface, mappedNote);
+
         // Remember the long pressed note to use it either for editing or for changing the length of
         // the note on pad release
-        this.noteEditPosition = new NotePosition (this.configuration.getMidiEditChannel (), index % 8, this.keyManager.map (y));
+        this.noteEditPosition = new NotePosition (this.configuration.getMidiEditChannel (), step, mappedNote);
     }
 
 

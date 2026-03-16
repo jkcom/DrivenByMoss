@@ -52,6 +52,9 @@ public class Drum4View extends AbstractDrum4View<LaunchpadControlSurface, Launch
         final int sound = y % this.lanes + this.scales.getDrumOffset ();
         final int laneOffset = (this.allRows - 1 - y) / this.lanes * this.numColumns;
 
+        LaunchpadNoteLongPressHandler.selectNote (this.getClip (), this.configuration.getMidiEditChannel (), laneOffset + x, sound);
+        LaunchpadNoteLongPressHandler.showNoteNotification (this.surface, sound);
+
         // Remember the long pressed note to use it either for editing or for changing the length of
         // the note on pad release
         this.noteEditPosition = new NotePosition (this.configuration.getMidiEditChannel (), laneOffset + x, sound);

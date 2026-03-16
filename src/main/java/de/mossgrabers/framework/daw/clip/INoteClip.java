@@ -58,6 +58,15 @@ public interface INoteClip extends IClip, IPinnable
 
 
     /**
+     * Select the note at the given step position in the piano roll.
+     *
+     * @param position The position of the note
+     * @param clearCurrentSelection True to clear the current selection first
+     */
+    void selectStepContents (NotePosition position, boolean clearCurrentSelection);
+
+
+    /**
      * Toggle a note at a step.
      *
      * @param position The position of the note
