@@ -192,9 +192,8 @@ public class NoteParameter extends AbstractParameterImpl
                 break;
 
             case RECURRENCE_LENGTH:
-                final int recurrence = stepInfo.getRecurrenceLength () - 1;
-                normalizedValue = recurrence / (double) 7;
-                break;
+                final int recurrence = stepInfo.isRecurrenceEnabled () ? stepInfo.getRecurrenceLength () : 1;
+                return recurrence < 2 ? 0 : recurrence == 8 ? 127 : recurrence * 16 - 1;
 
             default:
                 break;
@@ -208,6 +207,29 @@ public class NoteParameter extends AbstractParameterImpl
     @Override
     public void setValue (final IValueChanger valueChanger, final int value)
     {
+        if (this.noteAttribute == NoteAttribute.RECURRENCE_LENGTH)
+        {
+            final int recurrence = Math.min (8, Math.max (1, value / 16 + 1));
+            final boolean isRecurrenceEnabled = recurrence > 1;
+
+            if (!this.host.supports (this.noteAttribute))
+                return;
+
+            final INoteClip clip = this.callback.getClip ();
+            for (final NotePosition notePosition: this.callback.getNotePosition (this.parameterIndex))
+            {
+                final IStepInfo stepInfo = clip.getStep (notePosition);
+                if (stepInfo.getState () == StepState.OFF)
+                    return;
+
+                clip.updateStepIsRecurrenceEnabled (notePosition, isRecurrenceEnabled);
+                clip.updateStepRecurrenceLength (notePosition, recurrence);
+            }
+
+            this.notify ("Recurrence: %s", isRecurrenceEnabled ? Integer.toString (recurrence) : "Off");
+            return;
+        }
+
         this.setNormalizedValue (valueChanger.toNormalizedValue (value));
     }
 
@@ -320,7 +342,12 @@ public class NoteParameter extends AbstractParameterImpl
                     throw new UnsupportedOperationException ();
 
                 case RECURRENCE_LENGTH:
-                    throw new UnsupportedOperationException ();
+                    final int recurrence = Math.max (1, (int) Math.round (normalizedValue * 7) + 1);
+                    final boolean isRecurrenceEnabled = recurrence > 1;
+                    clip.updateStepIsRecurrenceEnabled (notePosition, isRecurrenceEnabled);
+                    clip.updateStepRecurrenceLength (notePosition, recurrence);
+                    this.notify ("Recurrence: %s", isRecurrenceEnabled ? Integer.toString (recurrence) : "Off");
+                    break;
             }
         }
     }
@@ -443,7 +470,9 @@ public class NoteParameter extends AbstractParameterImpl
                 case RECURRENCE_LENGTH:
                     clip.changeStepRecurrenceLength (notePosition, value);
                     final int recurrence = stepInfo.getRecurrenceLength ();
-                    this.delayedNotify ("Recurrence: %s", () -> recurrence < 2 ? "Off" : Integer.toString (recurrence));
+                    final boolean isRecurrenceEnabled = recurrence > 1;
+                    clip.updateStepIsRecurrenceEnabled (notePosition, isRecurrenceEnabled);
+                    this.delayedNotify ("Recurrence: %s", () -> !stepInfo.isRecurrenceEnabled () || recurrence < 2 ? "Off" : Integer.toString (recurrence));
                     break;
             }
         }
@@ -553,6 +582,7 @@ public class NoteParameter extends AbstractParameterImpl
                     break;
 
                 case RECURRENCE_LENGTH:
+                    clip.updateStepIsRecurrenceEnabled (notePosition, false);
                     clip.updateStepRecurrenceLength (notePosition, 1);
                     break;
             }
@@ -633,7 +663,7 @@ public class NoteParameter extends AbstractParameterImpl
 
             case RECURRENCE_LENGTH:
                 final int recurrence = stepInfo.getRecurrenceLength ();
-                return recurrence < 2 ? "Off" : Integer.toString (recurrence);
+                return !stepInfo.isRecurrenceEnabled () || recurrence < 2 ? "Off" : Integer.toString (recurrence);
         }
 
         return "";

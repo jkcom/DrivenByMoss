@@ -7,9 +7,13 @@ package de.mossgrabers.controller.novation.launchpad.view;
 import de.mossgrabers.controller.novation.launchpad.controller.LaunchpadColorManager;
 import de.mossgrabers.controller.novation.launchpad.controller.LaunchpadControlSurface;
 import de.mossgrabers.framework.controller.ButtonID;
+import de.mossgrabers.framework.controller.grid.IPadGrid;
 import de.mossgrabers.framework.controller.valuechanger.IValueChanger;
 import de.mossgrabers.framework.daw.IHost;
 import de.mossgrabers.framework.daw.IModel;
+import de.mossgrabers.framework.daw.clip.INoteClip;
+import de.mossgrabers.framework.daw.clip.IStepInfo;
+import de.mossgrabers.framework.daw.clip.NotePosition;
 import de.mossgrabers.framework.mode.INoteEditor;
 import de.mossgrabers.framework.mode.INoteEditorMode;
 import de.mossgrabers.framework.mode.NoteEditor;
@@ -27,8 +31,8 @@ import de.mossgrabers.framework.utils.ButtonEvent;
  * <li>Gain
  * <li>Pan
  * <li>Pitch
- * <li>Timbre
- * <li>Pressure
+ * <li>Recurrence
+ * <li>Recurrence Pattern
  * </ol>
  *
  * @author Jürgen Moßgraber
@@ -75,8 +79,8 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
             new NoteParameter (NoteAttribute.GAIN, null, model, this.noteEditor, valueChanger),
             new NoteParameter (NoteAttribute.PANNING, null, model, this.noteEditor, valueChanger),
             new NoteParameter (NoteAttribute.TRANSPOSE, null, model, this.noteEditor, valueChanger),
-            new NoteParameter (NoteAttribute.TIMBRE, null, model, this.noteEditor, valueChanger),
-            new NoteParameter (NoteAttribute.PRESSURE, null, model, this.noteEditor, valueChanger)
+            new NoteParameter (NoteAttribute.RECURRENCE_LENGTH, null, model, this.noteEditor, valueChanger),
+            null
         };
 
         final IHost host = model.getHost ();
@@ -89,7 +93,7 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
             host.supports (NoteAttribute.GAIN),
             host.supports (NoteAttribute.PANNING),
             host.supports (NoteAttribute.TRANSPOSE),
-            host.supports (NoteAttribute.TIMBRE),
+            false,
             false
         };
     }
@@ -113,7 +117,8 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
         this.surface.setupFader (index, COLUMN_COLORS[index], this.columnPan[index]);
 
         // Prevent issue with catch mode by initializing fader value at setup
-        this.onValueKnob (index, this.getFaderValue (index));
+        if (index < 7)
+            this.onValueKnob (index, this.getFaderValue (index));
     }
 
 
@@ -121,7 +126,37 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
     @Override
     public void onValueKnob (final int index, final int value)
     {
+        if (index >= 7)
+            return;
+
         // Set immediately to prevent issue with relative scaling mode
+        this.parameters[index].setValueImmediatly (value);
+    }
+
+
+    /** {@inheritDoc} */
+    @Override
+    public void onGridNote (final int note, final int velocity)
+    {
+        if (velocity == 0)
+            return;
+
+        final int num = note - 36;
+        final int index = num % 8;
+        if (index == 7)
+        {
+            this.toggleRecurrencePatternStep (num / 8);
+            return;
+        }
+
+        if (index != 6)
+        {
+            super.onGridNote (note, velocity);
+            return;
+        }
+
+        final int row = num / 8;
+        final int value = row == 0 ? 0 : Math.min (127, (row + 1) * 16 - 1);
         this.parameters[index].setValueImmediatly (value);
     }
 
@@ -130,6 +165,9 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
     @Override
     protected int getFaderValue (final int index)
     {
+        if (index >= 7)
+            return 0;
+
         return this.parameters[index].getValue ();
     }
 
@@ -138,8 +176,10 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
     @Override
     public void drawGrid ()
     {
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 7; i++)
             this.surface.setFaderValue (i, this.parameters[i].getValue ());
+
+        this.drawRecurrencePatternColumn ();
     }
 
 
@@ -168,5 +208,51 @@ public class NoteEditView extends AbstractFaderView implements INoteEditorMode
     public INoteEditor getNoteEditor ()
     {
         return this.noteEditor;
+    }
+
+
+    private void toggleRecurrencePatternStep (final int step)
+    {
+        final INoteClip clip = this.noteEditor.getClip ();
+        if (clip == null)
+            return;
+
+        for (final NotePosition notePosition: this.noteEditor.getNotes ())
+        {
+            final IStepInfo stepInfo = clip.getStep (notePosition);
+            if (!stepInfo.isRecurrenceEnabled ())
+                continue;
+
+            if (step >= stepInfo.getRecurrenceLength ())
+                continue;
+
+            clip.updateStepRecurrenceMaskToggleBit (notePosition, step);
+        }
+    }
+
+
+    private void drawRecurrencePatternColumn ()
+    {
+        final IPadGrid padGrid = this.surface.getPadGrid ();
+        final INoteClip clip = this.noteEditor.getClip ();
+        if (clip == null || this.noteEditor.getNotes ().isEmpty ())
+        {
+            for (int step = 0; step < 8; step++)
+                padGrid.lightEx (7, step, LaunchpadColorManager.LAUNCHPAD_COLOR_BLACK);
+            return;
+        }
+
+        final IStepInfo stepInfo = clip.getStep (this.noteEditor.getNotes ().get (0));
+        final boolean isEnabled = stepInfo.isRecurrenceEnabled ();
+        final int recurrenceLength = isEnabled ? stepInfo.getRecurrenceLength () : 0;
+        final int recurrenceMask = stepInfo.getRecurrenceMask ();
+
+        for (int step = 0; step < 8; step++)
+        {
+            final boolean isActive = step < recurrenceLength;
+            final boolean isOn = isActive && (recurrenceMask & 1 << step) > 0;
+            final int color = !isActive ? LaunchpadColorManager.LAUNCHPAD_COLOR_BLACK : isOn ? LaunchpadColorManager.LAUNCHPAD_COLOR_ROSE : LaunchpadColorManager.LAUNCHPAD_COLOR_GREY_LO;
+            padGrid.lightEx (7, 7 - step, color);
+        }
     }
 }
