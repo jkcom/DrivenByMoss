@@ -13,6 +13,7 @@ import de.mossgrabers.framework.controller.ButtonID;
 import de.mossgrabers.framework.controller.grid.IPadGrid;
 import de.mossgrabers.framework.daw.IModel;
 import de.mossgrabers.framework.daw.ITransport;
+import de.mossgrabers.framework.daw.clip.INoteClip;
 import de.mossgrabers.framework.daw.constants.Resolution;
 import de.mossgrabers.framework.daw.midi.INoteRepeat;
 import de.mossgrabers.framework.daw.resource.ChannelType;
@@ -60,6 +61,8 @@ public class ShiftView extends AbstractShiftView<LaunchpadControlSurface, Launch
     private final LaunchpadConfiguration                                                   configuration;
     private final ConfiguredRecordCommand<LaunchpadControlSurface, LaunchpadConfiguration> configuredRecordCommand;
     private final ConfiguredRecordCommand<LaunchpadControlSurface, LaunchpadConfiguration> configuredShiftedRecordCommand;
+    private final INoteClip                                                               resolutionClip;
+    private final INoteClip                                                               shiftClip;
 
 
     /**
@@ -73,6 +76,8 @@ public class ShiftView extends AbstractShiftView<LaunchpadControlSurface, Launch
         super ("Shift", surface, model);
 
         this.configuration = this.surface.getConfiguration ();
+        this.resolutionClip = this.model.getNoteClip (8, 128);
+        this.shiftClip = this.model.getNoteClip (128, 128);
 
         this.configuredRecordCommand = new ConfiguredRecordCommand<> (false, this.model, surface);
         this.configuredShiftedRecordCommand = new ConfiguredRecordCommand<> (true, this.model, surface);
@@ -155,6 +160,8 @@ public class ShiftView extends AbstractShiftView<LaunchpadControlSurface, Launch
                 padGrid.light (i, LaunchpadColorManager.LAUNCHPAD_COLOR_BLACK);
             for (int i = 92; i < 97; i++)
                 padGrid.light (i, LaunchpadColorManager.LAUNCHPAD_COLOR_BLACK);
+            padGrid.light (92, LaunchpadColorManager.LAUNCHPAD_COLOR_BLUE);
+            padGrid.light (93, LaunchpadColorManager.LAUNCHPAD_COLOR_GREEN);
             return;
         }
 
@@ -311,6 +318,24 @@ public class ShiftView extends AbstractShiftView<LaunchpadControlSurface, Launch
                 this.surface.getDisplay ().notify ("Fixed Accent: " + (enabled ? "On" : "Off"));
                 break;
 
+            case 92:
+                if (this.surface.isPro ())
+                {
+                    this.shiftClipNotes (true);
+                    break;
+                }
+                this.handleTransport (note);
+                break;
+
+            case 93:
+                if (this.surface.isPro ())
+                {
+                    this.shiftClipNotes (false);
+                    break;
+                }
+                this.handleTransport (note);
+                break;
+
             case 97:
                 this.model.getTrackBank ().addChannel (ChannelType.INSTRUMENT);
                 break;
@@ -448,5 +473,22 @@ public class ShiftView extends AbstractShiftView<LaunchpadControlSurface, Launch
     {
         this.configuration.setNoteRepeatLength (Resolution.values ()[index]);
         this.surface.scheduleTask ( () -> this.surface.getDisplay ().notify ("Note Length: " + Resolution.getNameAt (index)), 100);
+    }
+
+
+    private void shiftClipNotes (final boolean moveLeft)
+    {
+        if (!this.shiftClip.doesExist ())
+        {
+            this.surface.getDisplay ().notify ("No note clip selected");
+            return;
+        }
+
+        final double amount = this.resolutionClip.getStepLength ();
+        this.shiftClip.setStepLength (amount);
+        if (this.shiftClip.shiftAllNotes (amount, moveLeft, true))
+            this.surface.getDisplay ().notify (moveLeft ? "Shift Notes Left: 1 Step" : "Shift Notes Right: 1 Step");
+        else
+            this.surface.getDisplay ().notify ("Could not shift notes");
     }
 }

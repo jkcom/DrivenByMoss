@@ -536,6 +536,18 @@ public interface INoteClip extends IClip, IPinnable
 
 
     /**
+     * Shift the start position of all notes whose start lies inside the current loop range. The note
+     * duration remains unchanged.
+     *
+     * @param beats The number of beats to shift
+     * @param moveLeft True to shift left otherwise right
+     * @param wrapAround True to wrap note starts inside the loop range
+     * @return True if shifting could be started
+     */
+    boolean shiftAllNotes (double beats, boolean moveLeft, boolean wrapAround);
+
+
+    /**
      * Does the row contain any notes?
      *
      * @param channel The MIDI channel

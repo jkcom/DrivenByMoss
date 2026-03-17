@@ -35,6 +35,7 @@ The codebase is predominantly Java 21 and is organized around controller-specifi
 - Package artifacts: `mvn clean package -Dbitwig.extension.directory=target`
 - Full install flow: `mvn clean install -Dbitwig.extension.directory=target`
 - Developer quick path from README: `mvn install`
+- After making changes, always run `./install-bitwig-local.sh`
 - Linux release helper: `./release-linux.sh`
 - macOS release helper: `./release-macos.sh`
 - Windows release helper: `release-windows.cmd`

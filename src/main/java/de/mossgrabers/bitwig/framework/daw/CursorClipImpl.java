@@ -4,9 +4,13 @@
 
 package de.mossgrabers.bitwig.framework.daw;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 import com.bitwig.extension.controller.api.Clip;
 import com.bitwig.extension.controller.api.ControllerHost;
@@ -39,7 +43,10 @@ import de.mossgrabers.framework.daw.data.empty.EmptyStepInfo;
 public class CursorClipImpl implements INoteClip
 {
     /** The range of the transpose attribute. */
-    private static final double      TRANSPOSE_RANGE = 96.0;
+    private static final double      TRANSPOSE_RANGE         = 96.0;
+    private static final long        NOTE_SHIFT_PAGE_DELAY   = 180;
+    private static final long        NOTE_SHIFT_SET_DELAY    = 220;
+    private static final double      NOTE_SHIFT_STEP_EPSILON = 0.0001;
 
     private final IHost              host;
     private final IValueChanger      valueChanger;
@@ -55,6 +62,69 @@ public class CursorClipImpl implements INoteClip
     private int                      editPage        = 0;
     private double                   stepLength;
     private final List<NotePosition> editSteps       = new ArrayList<> ();
+    private final Deque<ShiftRequest> pendingShiftRequests = new ArrayDeque<> ();
+    private boolean                  isShiftingNotes = false;
+
+
+    private static final class ShiftedNote
+    {
+        private final int       channel;
+        private final int       sourceStep;
+        private final int       destinationStep;
+        private final int       note;
+        private final IStepInfo stepInfo;
+
+
+        private ShiftedNote (final int channel, final int sourceStep, final int destinationStep, final int note, final IStepInfo stepInfo)
+        {
+            this.channel = channel;
+            this.sourceStep = sourceStep;
+            this.destinationStep = destinationStep;
+            this.note = note;
+            this.stepInfo = stepInfo;
+        }
+    }
+
+
+    private static final class ShiftRequest
+    {
+        private final double  beats;
+        private final boolean moveLeft;
+        private final boolean wrapAround;
+
+
+        private ShiftRequest (final double beats, final boolean moveLeft, final boolean wrapAround)
+        {
+            this.beats = beats;
+            this.moveLeft = moveLeft;
+            this.wrapAround = wrapAround;
+        }
+    }
+
+
+    private static final class NoteShiftState
+    {
+        private final int                         originalStep;
+        private final double                      originalStepLength;
+        private final int                         loopStartStep;
+        private final int                         loopLengthSteps;
+        private final int                         stepOffset;
+        private final boolean                     wrapAround;
+        private final List<ShiftedNote>           shiftedNotes     = new ArrayList<> ();
+        private final Map<Integer, List<ShiftedNote>> sourcePages      = new TreeMap<> ();
+        private final Map<Integer, List<ShiftedNote>> destinationPages = new TreeMap<> ();
+
+
+        private NoteShiftState (final int originalStep, final double originalStepLength, final int loopStartStep, final int loopLengthSteps, final int stepOffset, final boolean wrapAround)
+        {
+            this.originalStep = originalStep;
+            this.originalStepLength = originalStepLength;
+            this.loopStartStep = loopStartStep;
+            this.loopLengthSteps = loopLengthSteps;
+            this.stepOffset = stepOffset;
+            this.wrapAround = wrapAround;
+        }
+    }
 
 
     /**
@@ -981,6 +1051,43 @@ public class CursorClipImpl implements INoteClip
 
     /** {@inheritDoc} */
     @Override
+    public boolean shiftAllNotes (final double beats, final boolean moveLeft, final boolean wrapAround)
+    {
+        if (this.isShiftingNotes)
+        {
+            this.pendingShiftRequests.addLast (new ShiftRequest (beats, moveLeft, wrapAround));
+            return true;
+        }
+
+        if (beats < NOTE_SHIFT_STEP_EPSILON || !this.doesExist () || this.numSteps <= 0 || this.numRows <= 0)
+            return false;
+
+        final Clip clip = this.getClip ();
+        if (!clip.getTrack ().canHoldNoteData ().get ())
+            return false;
+
+        final double originalStepLength = this.stepLength;
+
+        final int loopStartStep = this.toStepIndex (this.getLoopStart ());
+        final int loopLengthSteps = this.toStepIndex (this.getLoopLength ());
+        final int stepOffset = this.toStepIndex (beats);
+        if (loopLengthSteps <= 0 || stepOffset <= 0)
+        {
+            this.setStepLength (originalStepLength);
+            return false;
+        }
+
+        this.isShiftingNotes = true;
+        final int originalStep = this.editPage * this.numSteps;
+        final int signedOffset = moveLeft ? -stepOffset : stepOffset;
+        final NoteShiftState state = new NoteShiftState (originalStep, originalStepLength, loopStartStep, loopLengthSteps, signedOffset, wrapAround);
+        this.collectShiftNotes (state, 0);
+        return true;
+    }
+
+
+    /** {@inheritDoc} */
+    @Override
     public boolean hasRowData (final int channel, final int row)
     {
         final IStepInfo [] [] [] data = this.getStepInfos ();
@@ -1247,6 +1354,302 @@ public class CursorClipImpl implements INoteClip
     }
 
 
+    private void collectShiftNotes (final NoteShiftState state, final int pageIndex)
+    {
+        final int numPages = (state.loopLengthSteps + this.numSteps - 1) / this.numSteps;
+        if (pageIndex >= numPages)
+        {
+            this.groupShiftNotes (state);
+            this.clearShiftNotes (state, new ArrayList<> (state.sourcePages.keySet ()), 0);
+            return;
+        }
+
+        final int pageStart = state.loopStartStep + pageIndex * this.numSteps;
+        final int currentPageStart = this.editPage * this.numSteps;
+        this.runShiftStage (state, () -> {
+            if (pageStart == currentPageStart)
+            {
+                this.captureShiftNotes (state, pageStart);
+                this.collectShiftNotes (state, pageIndex + 1);
+                return;
+            }
+
+            this.clearObservedPageData ();
+            this.scrollToAbsoluteStep (pageStart);
+            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> {
+                this.captureShiftNotes (state, pageStart);
+                this.collectShiftNotes (state, pageIndex + 1);
+            }), NOTE_SHIFT_PAGE_DELAY);
+        });
+    }
+
+
+    private void captureShiftNotes (final NoteShiftState state, final int pageStart)
+    {
+        final int remainingSteps = state.loopStartStep + state.loopLengthSteps - pageStart;
+        final int visibleSteps = Math.min (this.numSteps, remainingSteps);
+        final IStepInfo [] [] [] stepInfos = this.getStepInfos ();
+
+        synchronized (stepInfos)
+        {
+            for (int channel = 0; channel < stepInfos.length; channel++)
+            {
+                if (stepInfos[channel] == null)
+                    continue;
+
+                for (int step = 0; step < visibleSteps; step++)
+                {
+                    if (stepInfos[channel][step] == null)
+                        continue;
+
+                    for (int row = 0; row < this.numRows; row++)
+                    {
+                        final IStepInfo stepInfo = stepInfos[channel][step][row];
+                        if (stepInfo == null || stepInfo.getState () != StepState.START)
+                            continue;
+
+                        final int sourceStep = pageStart + step;
+                        state.shiftedNotes.add (new ShiftedNote (channel, sourceStep, this.getDestinationStep (state, sourceStep), row, stepInfo.createCopy ()));
+                    }
+                }
+            }
+        }
+    }
+
+
+    private int getDestinationStep (final NoteShiftState state, final int sourceStep)
+    {
+        final int relativeStep = sourceStep - state.loopStartStep;
+        if (state.wrapAround)
+            return state.loopStartStep + Math.floorMod (relativeStep + state.stepOffset, state.loopLengthSteps);
+
+        final int destinationStep = relativeStep + state.stepOffset;
+        if (destinationStep < 0 || destinationStep >= state.loopLengthSteps)
+            return -1;
+        return state.loopStartStep + destinationStep;
+    }
+
+
+    private void groupShiftNotes (final NoteShiftState state)
+    {
+        for (final ShiftedNote shiftedNote: state.shiftedNotes)
+        {
+            this.addShiftNote (state.sourcePages, this.getPageStart (state, shiftedNote.sourceStep), shiftedNote);
+            if (shiftedNote.destinationStep >= 0)
+                this.addShiftNote (state.destinationPages, this.getPageStart (state, shiftedNote.destinationStep), shiftedNote);
+        }
+    }
+
+
+    private void addShiftNote (final Map<Integer, List<ShiftedNote>> pages, final int pageStart, final ShiftedNote shiftedNote)
+    {
+        pages.computeIfAbsent (Integer.valueOf (pageStart), key -> new ArrayList<> ()).add (shiftedNote);
+    }
+
+
+    private int getPageStart (final NoteShiftState state, final int step)
+    {
+        return state.loopStartStep + (step - state.loopStartStep) / this.numSteps * this.numSteps;
+    }
+
+
+    private void clearShiftNotes (final NoteShiftState state, final List<Integer> pages, final int pageIndex)
+    {
+        if (pageIndex >= pages.size ())
+        {
+            this.setShiftNotes (state, new ArrayList<> (state.destinationPages.keySet ()), 0);
+            return;
+        }
+
+        final int pageStart = pages.get (pageIndex).intValue ();
+        this.runShiftStage (state, () -> {
+            this.scrollToAbsoluteStep (pageStart);
+            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> {
+                for (final ShiftedNote shiftedNote: state.sourcePages.get (Integer.valueOf (pageStart)))
+                {
+                    final NotePosition notePosition = new NotePosition (shiftedNote.channel, shiftedNote.sourceStep - pageStart, shiftedNote.note);
+                    this.clearStep (notePosition);
+                    this.clearLocalStepData (notePosition);
+                }
+                this.clearShiftNotes (state, pages, pageIndex + 1);
+            }), NOTE_SHIFT_PAGE_DELAY);
+        });
+    }
+
+
+    private void setShiftNotes (final NoteShiftState state, final List<Integer> pages, final int pageIndex)
+    {
+        if (pageIndex >= pages.size ())
+        {
+            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> this.finishShiftNotes (state)), NOTE_SHIFT_SET_DELAY);
+            return;
+        }
+
+        final int pageStart = pages.get (pageIndex).intValue ();
+        this.runShiftStage (state, () -> {
+            this.scrollToAbsoluteStep (pageStart);
+            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> this.writeShiftNotes (state, pages, pageIndex, pageStart)), NOTE_SHIFT_PAGE_DELAY);
+        });
+    }
+
+
+    private void finishShiftNotes (final NoteShiftState state)
+    {
+        this.setStepLength (state.originalStepLength);
+        this.scrollToAbsoluteStep (state.originalStep);
+        this.isShiftingNotes = false;
+        this.processPendingShiftRequest ();
+    }
+
+
+    private void writeShiftNotes (final NoteShiftState state, final List<Integer> pages, final int pageIndex, final int pageStart)
+    {
+        final List<ShiftedNote> shiftedNotes = state.destinationPages.get (Integer.valueOf (pageStart));
+        for (final ShiftedNote shiftedNote: shiftedNotes)
+        {
+            final NotePosition notePosition = new NotePosition (shiftedNote.channel, shiftedNote.destinationStep - pageStart, shiftedNote.note);
+            final IStepInfo stepInfo = shiftedNote.stepInfo;
+            this.setStep (notePosition, (int) (stepInfo.getVelocity () * 127), stepInfo.getDuration ());
+        }
+
+        this.host.scheduleTask ( () -> this.runShiftStage (state, () -> {
+            for (final ShiftedNote shiftedNote: shiftedNotes)
+                this.applyShiftedStepData (pageStart, shiftedNote);
+            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> this.setShiftNotes (state, pages, pageIndex + 1)), NOTE_SHIFT_SET_DELAY);
+        }), NOTE_SHIFT_SET_DELAY);
+    }
+
+
+    private void applyShiftedStepData (final int pageStart, final ShiftedNote shiftedNote)
+    {
+        final NotePosition notePosition = new NotePosition (shiftedNote.channel, shiftedNote.destinationStep - pageStart, shiftedNote.note);
+        final IStepInfo stepInfo = shiftedNote.stepInfo;
+        this.updateStepMuteState (notePosition, stepInfo.isMuted ());
+        this.updateStepVelocity (notePosition, stepInfo.getVelocity ());
+        this.updateStepVelocitySpread (notePosition, stepInfo.getVelocitySpread ());
+        this.updateStepReleaseVelocity (notePosition, stepInfo.getReleaseVelocity ());
+        this.updateStepPressure (notePosition, stepInfo.getPressure ());
+        this.updateStepTimbre (notePosition, stepInfo.getTimbre ());
+        this.updateStepPan (notePosition, stepInfo.getPan ());
+        this.updateStepTranspose (notePosition, stepInfo.getTranspose ());
+        this.updateStepGain (notePosition, stepInfo.getGain ());
+
+        this.updateStepIsChanceEnabled (notePosition, stepInfo.isChanceEnabled ());
+        this.updateStepChance (notePosition, stepInfo.getChance ());
+
+        this.updateStepIsOccurrenceEnabled (notePosition, stepInfo.isOccurrenceEnabled ());
+        this.setStepOccurrence (notePosition, stepInfo.getOccurrence ());
+
+        this.updateStepIsRecurrenceEnabled (notePosition, stepInfo.isRecurrenceEnabled ());
+        this.updateStepRecurrenceLength (notePosition, stepInfo.getRecurrenceLength ());
+        this.updateStepRecurrenceMask (notePosition, stepInfo.getRecurrenceMask ());
+
+        this.updateStepIsRepeatEnabled (notePosition, stepInfo.isRepeatEnabled ());
+        this.updateStepRepeatCount (notePosition, stepInfo.getRepeatCount ());
+        this.updateStepRepeatCurve (notePosition, stepInfo.getRepeatCurve ());
+        this.updateStepRepeatVelocityCurve (notePosition, stepInfo.getRepeatVelocityCurve ());
+        this.updateStepRepeatVelocityEnd (notePosition, stepInfo.getRepeatVelocityEnd ());
+
+        this.updateLocalStepData (notePosition, stepInfo);
+    }
+
+
+    private void runShiftStage (final NoteShiftState state, final Runnable task)
+    {
+        try
+        {
+            task.run ();
+        }
+        catch (final RuntimeException ex)
+        {
+            this.abortShiftNotes (state, ex);
+        }
+    }
+
+
+    private void abortShiftNotes (final NoteShiftState state, final RuntimeException ex)
+    {
+        this.host.error ("Could not shift clip notes.", ex);
+        this.setStepLength (state.originalStepLength);
+        this.scrollToAbsoluteStep (state.originalStep);
+        this.isShiftingNotes = false;
+        this.pendingShiftRequests.clear ();
+    }
+
+
+    private void clearObservedPageData ()
+    {
+        final IStepInfo [] [] [] stepInfos = this.getStepInfos ();
+        synchronized (stepInfos)
+        {
+            for (int channel = 0; channel < stepInfos.length; channel++)
+                stepInfos[channel] = new IStepInfo [this.numSteps] [];
+        }
+    }
+
+
+    private void scrollToAbsoluteStep (final int step)
+    {
+        this.getClip ().scrollToStep (step);
+        this.editPage = step / this.numSteps;
+    }
+
+
+    private int toStepIndex (final double beats)
+    {
+        final double steps = beats / this.stepLength;
+        final int roundedSteps = (int) Math.round (steps);
+        return Math.abs (steps - roundedSteps) < NOTE_SHIFT_STEP_EPSILON ? roundedSteps : -1;
+    }
+
+
+    private void clearLocalStepData (final NotePosition notePosition)
+    {
+        this.getUpdateableStep (notePosition).setState (StepState.OFF);
+    }
+
+
+    private void updateLocalStepData (final NotePosition notePosition, final IStepInfo sourceStep)
+    {
+        final StepInfoImpl stepInfo = this.getUpdateableStep (notePosition);
+        stepInfo.setState (sourceStep.getState ());
+        stepInfo.setSelected (sourceStep.isSelected ());
+        stepInfo.setMuted (sourceStep.isMuted ());
+        stepInfo.setDuration (sourceStep.getDuration ());
+        stepInfo.setVelocity (sourceStep.getVelocity ());
+        stepInfo.setVelocitySpread (sourceStep.getVelocitySpread ());
+        stepInfo.setReleaseVelocity (sourceStep.getReleaseVelocity ());
+        stepInfo.setPressure (sourceStep.getPressure ());
+        stepInfo.setTimbre (sourceStep.getTimbre ());
+        stepInfo.setPan (sourceStep.getPan ());
+        stepInfo.setTranspose (sourceStep.getTranspose ());
+        stepInfo.setGain (sourceStep.getGain ());
+        stepInfo.setIsChanceEnabled (sourceStep.isChanceEnabled ());
+        stepInfo.setChance (sourceStep.getChance ());
+        stepInfo.setIsOccurrenceEnabled (sourceStep.isOccurrenceEnabled ());
+        stepInfo.setOccurrence (sourceStep.getOccurrence ());
+        stepInfo.setIsRecurrenceEnabled (sourceStep.isRecurrenceEnabled ());
+        stepInfo.setRecurrenceLength (sourceStep.getRecurrenceLength ());
+        stepInfo.setRecurrenceMask (sourceStep.getRecurrenceMask ());
+        stepInfo.setIsRepeatEnabled (sourceStep.isRepeatEnabled ());
+        stepInfo.setRepeatCount (sourceStep.getRepeatCount ());
+        stepInfo.setRepeatCurve (sourceStep.getRepeatCurve ());
+        stepInfo.setRepeatVelocityCurve (sourceStep.getRepeatVelocityCurve ());
+        stepInfo.setRepeatVelocityEnd (sourceStep.getRepeatVelocityEnd ());
+    }
+
+
+    private void processPendingShiftRequest ()
+    {
+        final ShiftRequest request = this.pendingShiftRequests.pollFirst ();
+        if (request == null)
+            return;
+
+        this.setStepLength (request.beats);
+        this.host.scheduleTask ( () -> this.shiftAllNotes (request.beats, request.moveLeft, request.wrapAround), 1);
+    }
+
+
     /**
      * Update the locally changed step data in Bitwig.
      *
@@ -1295,6 +1698,9 @@ public class CursorClipImpl implements INoteClip
      */
     private void handleStepData (final NoteStep noteStep)
     {
+        if (this.isShiftingNotes)
+            return;
+
         final int channel = noteStep.channel ();
         final int step = noteStep.x ();
         final int note = noteStep.y ();
