@@ -25,13 +25,13 @@ public class LaunchpadConfiguration extends AbstractConfiguration
 {
     private static final Views []  PREFERRED_NOTE_VIEWS  =
     {
+        Views.DRUM,
+        Views.DRUM4,
+        Views.DRUM8,
         Views.PLAY,
         Views.CHORDS,
         Views.PIANO,
         Views.DRUM64,
-        Views.DRUM,
-        Views.DRUM4,
-        Views.DRUM8,
         Views.SEQUENCER,
         Views.RAINDROPS,
         Views.POLY_SEQUENCER

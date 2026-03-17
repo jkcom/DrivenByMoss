@@ -1684,6 +1684,8 @@ public abstract class AbstractConfiguration implements Configuration
      */
     protected void activateStartupViewSetting (final ISettingsUI settingsUI, final Views [] views)
     {
+        this.startupView = views[0];
+
         final String [] labels = new String [views.length];
         for (int i = 0; i < views.length; i++)
             labels[i] = Views.getViewName (views[i]);

@@ -44,8 +44,8 @@ public class CursorClipImpl implements INoteClip
 {
     /** The range of the transpose attribute. */
     private static final double      TRANSPOSE_RANGE         = 96.0;
-    private static final long        NOTE_SHIFT_PAGE_DELAY   = 180;
-    private static final long        NOTE_SHIFT_SET_DELAY    = 220;
+    private static final long        NOTE_SHIFT_PAGE_DELAY   = 45;
+    private static final long        NOTE_SHIFT_SET_DELAY    = 70;
     private static final double      NOTE_SHIFT_STEP_EPSILON = 0.0001;
 
     private final IHost              host;
@@ -1462,18 +1462,7 @@ public class CursorClipImpl implements INoteClip
         }
 
         final int pageStart = pages.get (pageIndex).intValue ();
-        this.runShiftStage (state, () -> {
-            this.scrollToAbsoluteStep (pageStart);
-            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> {
-                for (final ShiftedNote shiftedNote: state.sourcePages.get (Integer.valueOf (pageStart)))
-                {
-                    final NotePosition notePosition = new NotePosition (shiftedNote.channel, shiftedNote.sourceStep - pageStart, shiftedNote.note);
-                    this.clearStep (notePosition);
-                    this.clearLocalStepData (notePosition);
-                }
-                this.clearShiftNotes (state, pages, pageIndex + 1);
-            }), NOTE_SHIFT_PAGE_DELAY);
-        });
+        this.withVisiblePage (state, pageStart, () -> this.clearShiftNotesOnPage (state, pages, pageIndex, pageStart));
     }
 
 
@@ -1486,10 +1475,7 @@ public class CursorClipImpl implements INoteClip
         }
 
         final int pageStart = pages.get (pageIndex).intValue ();
-        this.runShiftStage (state, () -> {
-            this.scrollToAbsoluteStep (pageStart);
-            this.host.scheduleTask ( () -> this.runShiftStage (state, () -> this.writeShiftNotes (state, pages, pageIndex, pageStart)), NOTE_SHIFT_PAGE_DELAY);
-        });
+        this.withVisiblePage (state, pageStart, () -> this.writeShiftNotes (state, pages, pageIndex, pageStart));
     }
 
 
@@ -1517,6 +1503,34 @@ public class CursorClipImpl implements INoteClip
                 this.applyShiftedStepData (pageStart, shiftedNote);
             this.host.scheduleTask ( () -> this.runShiftStage (state, () -> this.setShiftNotes (state, pages, pageIndex + 1)), NOTE_SHIFT_SET_DELAY);
         }), NOTE_SHIFT_SET_DELAY);
+    }
+
+
+    private void clearShiftNotesOnPage (final NoteShiftState state, final List<Integer> pages, final int pageIndex, final int pageStart)
+    {
+        for (final ShiftedNote shiftedNote: state.sourcePages.get (Integer.valueOf (pageStart)))
+        {
+            final NotePosition notePosition = new NotePosition (shiftedNote.channel, shiftedNote.sourceStep - pageStart, shiftedNote.note);
+            this.clearStep (notePosition);
+            this.clearLocalStepData (notePosition);
+        }
+
+        this.clearShiftNotes (state, pages, pageIndex + 1);
+    }
+
+
+    private void withVisiblePage (final NoteShiftState state, final int pageStart, final Runnable task)
+    {
+        this.runShiftStage (state, () -> {
+            if (pageStart == this.editPage * this.numSteps)
+            {
+                task.run ();
+                return;
+            }
+
+            this.scrollToAbsoluteStep (pageStart);
+            this.host.scheduleTask ( () -> this.runShiftStage (state, task), NOTE_SHIFT_PAGE_DELAY);
+        });
     }
 
 

@@ -58,7 +58,21 @@ public class SelectPlayViewCommand<S extends IControlSurface<C>, C extends Confi
         final ViewManager viewManager = this.surface.getViewManager ();
         if (!this.allViewIds.contains (viewManager.getActiveID ()))
         {
-            this.surface.recallPreferredView (this.model.getCursorTrack ());
+            final ITrack cursorTrack = this.model.getCursorTrack ();
+            if (cursorTrack.doesExist ())
+            {
+                final Views preferredView = viewManager.getPreferredView (cursorTrack.getPosition ());
+                if (preferredView != null && this.viewIds.contains (preferredView))
+                {
+                    viewManager.setActive (preferredView);
+                    this.surface.getDisplay ().notify (viewManager.get (preferredView).getName ());
+                    return;
+                }
+            }
+
+            final Views defaultView = this.viewIds.get (0);
+            this.activatePreferredView (defaultView);
+            this.surface.getDisplay ().notify (viewManager.get (defaultView).getName ());
             return;
         }
 
