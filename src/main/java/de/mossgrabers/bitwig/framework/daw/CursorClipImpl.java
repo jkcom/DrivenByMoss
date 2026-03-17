@@ -10,6 +10,7 @@ import java.util.List;
 
 import com.bitwig.extension.controller.api.Clip;
 import com.bitwig.extension.controller.api.ControllerHost;
+import com.bitwig.extension.controller.api.CursorClip;
 import com.bitwig.extension.controller.api.CursorTrack;
 import com.bitwig.extension.controller.api.NoteOccurrence;
 import com.bitwig.extension.controller.api.NoteStep;
@@ -437,14 +438,12 @@ public class CursorClipImpl implements INoteClip
     @Override
     public void selectStepContents (final NotePosition notePosition, final boolean clearCurrentSelection)
     {
+        this.selectClip (this.selectedCursorClip, this.launcherClip);
         this.selectStepContents (this.selectedCursorClip, notePosition, clearCurrentSelection);
-        this.selectStepContents (this.selectedLauncherClip, notePosition, clearCurrentSelection);
-        this.selectStepContents (this.selectedArrangerClip, notePosition, clearCurrentSelection);
 
         this.host.scheduleTask (() -> {
+            this.selectClip (this.selectedCursorClip, this.launcherClip);
             this.selectStepContents (this.selectedCursorClip, notePosition, clearCurrentSelection);
-            this.selectStepContents (this.selectedLauncherClip, notePosition, clearCurrentSelection);
-            this.selectStepContents (this.selectedArrangerClip, notePosition, clearCurrentSelection);
         }, 50);
     }
 
@@ -1367,6 +1366,13 @@ public class CursorClipImpl implements INoteClip
         clip.showInEditor ();
         clip.scrollToStep (this.editPage * this.numSteps);
         clip.selectStepContents (notePosition.getChannel (), notePosition.getStep (), notePosition.getNote (), clearCurrentSelection);
+    }
+
+
+    private void selectClip (final Clip selectionClip, final Clip targetClip)
+    {
+        if (selectionClip instanceof final CursorClip cursorClip)
+            cursorClip.selectClip (targetClip);
     }
 
 

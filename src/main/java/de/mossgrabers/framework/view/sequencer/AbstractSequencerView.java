@@ -43,6 +43,7 @@ import de.mossgrabers.framework.view.Views;
  */
 public abstract class AbstractSequencerView<S extends IControlSurface<C>, C extends Configuration> extends AbstractView<S, C>
 {
+
     /** The color for highlighting a step with no content. */
     public static final String    COLOR_STEP_HILITE_NO_CONTENT = "COLOR_STEP_HILITE_NO_CONTENT";
     /** The color for highlighting a step with content. */
@@ -455,6 +456,22 @@ public abstract class AbstractSequencerView<S extends IControlSurface<C>, C exte
             noteEditor.addNote (clip, notePosition);
         else
             noteEditor.setNote (clip, notePosition);
+
+        this.selectEditedNoteInDaw (clip, notePosition, !addNote);
+    }
+
+
+    /**
+     * Re-apply note selection in the DAW after entering note edit mode so that UI components like
+     * the Inspector can update to the selected note.
+     *
+     * @param clip The clip which contains the note
+     * @param notePosition The position of the note
+     * @param clearCurrentSelection True to clear the current selection first
+     */
+    protected void selectEditedNoteInDaw (final INoteClip clip, final NotePosition notePosition, final boolean clearCurrentSelection)
+    {
+        clip.selectStepContents (notePosition, clearCurrentSelection);
     }
 
 
